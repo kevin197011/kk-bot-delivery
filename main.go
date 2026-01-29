@@ -3,10 +3,13 @@ package main
 import (
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"os"
+	"path/filepath"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
+	"github.com/schollz/progressbar/v3"
 )
 
 func main() {
@@ -33,10 +36,18 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Validate file existence
-	if _, err := os.Stat(*filePath); os.IsNotExist(err) {
+	// Validate file existence and get size
+	fileInfo, err := os.Stat(*filePath)
+	if os.IsNotExist(err) {
 		log.Fatalf("Error: File does not exist at path: %s", *filePath)
 	}
+
+	// Open file
+	file, err := os.Open(*filePath)
+	if err != nil {
+		log.Fatalf("Error opening file: %v", err)
+	}
+	defer file.Close()
 
 	// Initialize Bot API
 	bot, err := tgbotapi.NewBotAPI(*token)
@@ -44,15 +55,33 @@ func main() {
 		log.Fatalf("Error initializing bot: %v", err)
 	}
 
-	// Construct file upload request
-	params := tgbotapi.NewDocument(*userID, tgbotapi.FilePath(*filePath))
+	fmt.Printf("Sending file %s (%d bytes) to user %d...\n", *filePath, fileInfo.Size(), *userID)
+
+	// Create progress bar
+	bar := progressbar.DefaultBytes(
+		fileInfo.Size(),
+		"uploading",
+	)
+
+	// Wrap file reader with progress bar using io.TeeReader
+	// As data is read from 'file', it is written to 'bar', updating the progress
+	reader := io.TeeReader(file, bar)
+
+	// Construct file upload request using FileReader
+	// We use filepath.Base to ensure the sent file has the correct name
+	fileName := filepath.Base(*filePath)
+	params := tgbotapi.NewDocument(*userID, tgbotapi.FileReader{
+		Name:   fileName,
+		Reader: reader,
+	})
 
 	// Send file
-	fmt.Printf("Sending file %s to user %d...\n", *filePath, *userID)
 	message, err := bot.Send(params)
 	if err != nil {
+		fmt.Println() // Ensure valid newline after progress bar
 		log.Fatalf("Error sending file: %v", err)
 	}
 
+	fmt.Println() // Ensure valid newline after progress bar
 	fmt.Printf("File sent successfully! Message ID: %d\n", message.MessageID)
 }
